@@ -1,0 +1,87 @@
+第二章
+2.1 相关概念
+    RabbitMq整体就是一个生产者与消费者模型，主要负责接收、存储和转发消息。
+    2.1.1 生产者和消费者
+        Producer：生产者，投递消息一方。
+        消息一般包含2部分：消息体（payload）与标签（Label）。
+        消息体一般是一个带有业务逻辑结构的数据，比如JSON字符串。
+        标签用来表述该条消息。
+        RabbitMq会根据标签把消息发送给感兴趣的消费者（Consumer）。
+
+        Consumer：消费者，接收消息一方。
+        订阅队列。
+        消费一条消息时，只是消费消息的消息体（payload）。
+        在消息路由的过程中，标签会被丢弃，存入到队列中的消息只有消息体。
+        消费者不会知道生产者是谁，也不需要知道。
+
+        Broker：消息中间件的服务节点。
+        一个Broker可以看做一个RabbitMq服务节点，或者RabbitMq服务实例。
+        大多数情况下一个RabbitMq Broker看作一台RabbitMq服务器。
+
+        消费者方进行业务处理的线程和接收消息的线程不一定非要同一个线程，例如，消费者进程可以使用一个BlockingQueue。
+
+    2.1.2 队列
+        Queue：RabbitMq内部对象，用于存储消息。
+        RabbitMq中消息只能存储在队列中。Kafka将消息存储在topic中。
+        生产者最终将消息投递到队列中，消费者从队列中获取消息并消费。
+        多个消费者可以订阅同一个队列，消息会通过轮询的方式进行平摊。
+        RabbitMq不支持队列层面的广播消费。
+
+    2.1.3 交换器、路由键、绑定
+        Exchange：交换器。
+        与生产者直连，并将消息路由到指定队列中。
+        可以路由到一个或多个队列中，如果路由不到就会返回给生产者，或直接丢弃。
+
+        RoutingKey：路由键
+        生产者发消息给交换器时，一般会指定一个RoutingKey，指定该消息的路由规则。
+        RoutingKey需要与交换器类型和BindingKey联合使用才能最终生效。
+
+        Binding：绑定
+        RabbitMq中通过绑定将交换器与队列关联起来。
+        绑定是一般指定一个绑定键（BindingKey）。
+
+        生产者与交换器之间需要一个路由键，而交换器与队列之间需要一个绑定键。
+        当BindingKey与RoutingKey相匹配时，消息才会被路由到对应的队列中。
+        在绑定多个队列到同一个交换器上时，允许使用相同的BindingKey。
+        并且BandingKey依赖于交换器类型。fanout会无视BindingKey，将消息路由到所有绑定在该交换器的队列上。
+
+        某些情况下，RoutingKey和BindingKey可以看做是同一个东西。
+
+        在direct交换器模式下，RoutingKey和BindingKey需要完全匹配才能使用。
+        在topic交换器模式下，RoutingKey和BindingKey之间需要做模糊匹配。
+
+        BindingKey也属于RoutingKey中的一种。
+
+        大多数情况下，习惯性的将BindingKey写出RoutingKey，尤其在使用direct类型的交换器时。
+
+    2.1.4 交换器类型
+        有四种常用的交换器类型：fanout、direct、topic、headers。
+        fanout：
+            路由到所有与交换器绑定的队列上。
+        direct：
+            只路由到RoutingKey和BindingKey相同的队列上。也就是完全匹配。
+        topic：
+            进行模糊匹配。
+            “*”和“#”：
+                *：表示匹配RoutingKey的一个词
+                #：表示匹配RoutingKey的零个或多个词
+        headers：
+            不依赖于RoutingKey匹配规则路由消息，根据消息内容中的headers属性进行匹配。
+            性能差，也不实用，一般不用。
+
+    2.1.5 RabbitMq运转流程
+        生产者连接Broker建立一个Connection，开启一个Channel。
+        通过Channel声明一个Exchange和Query并设置相关属性（持久化、排他、自动删除等）。
+        生产者通过RoutingKey与Exchange绑定，Exchange通过BindingKey将消息投递给Queue，消费者订阅Queue消费消息。
+
+        与Broker建立连接是一条TCP连接，也就是Connection，每个Channel都会被指派一个唯一ID。
+        一个Connection可以建立多个Channel，每个线程一个Channel，复用TCP连接。
+        大多数操作都可以在Channel上进行。
+
+2.2 AMQP协议介绍
+    RabbitMq是AMQP协议的Erlang的实现。
+    AMQP协议包括三层：
+        Module Layer：位于协议最高层，主要定义供客户端调用的命令。
+        Session Layer：位于中间层，主要将客户端命令发给服务器，再将服务器应答返回客户端。
+        Transport Layer：位于最底层，主要传输二进制数据流。
+    AMQP本身是应用层协议，其填充于TCP协议层的数据部分。
