@@ -1,0 +1,109 @@
+第三章
+3.1 连接RabbitMq
+    可以使用给定参数（ip、port、用户名、密码等）来连接RabbitMq，也可以使用uri的方式来进行连接。
+    Channel或者Connection有个isOpen()方法来检测是否处于开启状态，但生产环境不推荐使用。
+    因为该方法的返回值依赖于shutdownCause的存在，有可能产生竞争。
+    通常要在同步关键字下使用才会线程安全。
+    通常调用createXXX或者newXXX方法之后都会简单的认为已经处于开启状态。
+    如果未处于开启状态来使用会抛出shutdownSignalException异常，只需捕获异常即可。
+
+3.2 使用交换器和队列
+    使用前要确保交换器和队列已经存在。
+    3.2.1 exchangeDeclare方法详解
+        Exchange.DeclareOk exchangeDeclare(String exchange,
+                    String type,
+                    boolean durable,
+                    boolean autoDelete,
+                    boolean internal,
+                    Map<String,Object> arguments) throws IOException;
+        返回值为Exchange.DeclareOK，用来标识成功声明了一个交换器。
+        exchange：交换器名称
+        type：交换器类型，fanout、direct、topic、headers等等
+        durable：是否持久化
+        autoDelete：是否自动删除，自动删除的前提是至少有一个队列或者交换器与这个交换交换器绑定。
+                    之后所有与这个交换器绑定的队列或者交换器都与此解绑。
+        internal：是否是内置的。
+        argument：其他一些结构化参数。
+
+        exchangeDeclare其他重载方法：
+        （1）Exchange.DeclareOk exchangeDeclare(String exchange,String type) throws IOException;
+        （2）Exchange.DeclareOk exchangeDeclare(String exchange,String type,boolean durable) throws IOException;
+        （3）Exchange.DeclareOk exchangeDeclare(String exchange,String type,boolean durable,boolean autoDelete,Map<String,Object> arguments) throws IOException;
+
+    3.2.2 queueDeclare方法详解
+        只有两个重载方法：
+        （1）Queue.DeclareOk queueDeclare() throws IOException;
+        （2）Queue.DeclareOk queueDeclare(String queue,
+                    boolean durable,
+                    boolean exclusive,
+                    boolean autoDelete,
+                    Map<String,Object> arguments) throws IOException;
+        不带参数的方法默认创建一个由RabbitMq命名的（类似于amq.gen-LhQzlgv3GhDov8PidabOXA名称，这种队列也称为匿名队列）、排他的、自动删除的、非持久化的队列。
+        queue：队列的名称
+        durable：是否持久化
+        exclusive：是否排他，如果一个队列被声明为排他队列，该队列仅对声明它的连接可见，并在连接断开时自动删除。
+                   排他队列是基于连接（Connection）可见的，同一个连接的不同信道（Channel）是可以同时访问到同一个连接创建的排他队列：“首次”是指如果一个连接已经声明了一个排他队列，其他连接是不允许建立同名的排他队列的，与普通队列不同：即使该队列是持久化的，一旦连接关闭或者客户端退出，该排他队列都会被自动删除，这种队列适用于一个客户端同时发送和读取消息的应用场景。
+        authDelete：是否自动删除。自动删除的前提：至少有一个消费者连接到这个队列，之后所有与这个队列连接的消费者都断开时，才会自动删除。
+        arguments：设置队列的其他一些参数。
+
+        生产者和消费者都能够使用queueDeclare来声明一个队列，但是如果消费者在同一个信道上订阅了另一个队列，就无法再声明队列了，必须先取消订阅，然后将信道置为“传输”模式。
+
+    3.2.3 queueBind方法详解
+        绑定：
+        Queue.BindOk queueBind(String queue,String exchange,String routingKey) throws IOException;
+        Queue.BindOk queueBind(String queue,String exchange,String routingKey,Map<String,Object> arguments) throws IOException;
+        void queueBindNoWait(String queue,String exchange,String routingKey,Map<String,Object> arguments) throws IOException;
+        解绑：
+        Queue.UnbindOk queueUnbind(String queue,String exchange,String routingKey) throws IOException;
+        Queue.UnbindOk queueUnbind(String queue,String exchange,String routingKey,Map<String,Object> arguments) throws IOException;
+
+    3.2.4 exchangeBind方法详解
+        Exchange.BindOk exchangeBind();
+        void exchangeBindNoWait();
+
+    3.2.5 合适创建
+        交换器不会耗费服务器的性能，队列会。
+        衡量RabbitMq的QPS只需要看队列即可。
+        RabbitMq官方建议生产者和消费者都应该尝试创建队列。
+
+3.4 消费消息
+    3.4.1 推模式
+        接收消息一般通过实现Consumer接口或者继承DefaultConsumer类来实现。
+        通过不同的消费者标签（consumerTag）来区分不同的订阅。
+        通过basicConsume()来实现推模式。
+
+    3.4.2 拉模式
+        通过basicGet()实现拉模式单条获取消息。
+
+        Basic.Consumer将信道（Channel）置为接收模式，直到取消队列的订阅为止。
+        在接收模式期间，RabbitMq会不断地推送消息给消费者，但也受Basic.Qos()的限制。
+
+3.5 消费端的确认与拒绝
+    当autoAsk参数设置为false时，对于RabbitMq服务端而言，队列中的消息分成两部分：一部分是等待投递给消费者的消息；一部分是已经投递给消费者但还没收到消费者确认信号的消息。
+    如果RabbitMq一直没有收到消费者的确认信号，并且消费此消息的消费者已经断开连接，那么RabbitMq会安排该消息重新进入队列，等待投递给下一个消费者，当然也有可能是还是原来的那个消费者。
+    而判断是否重新投递的唯一依据就是消费者的连接是否已经断开。
+
+    通过basicReject(long deliveryTag,boolean requeue) throws IOException;方法来拒绝消息。
+    deliveryTag：消息的编号，64位长整形值。
+    requeue：是否重新存入队列，以便发给下一个订阅的消费者。
+    该方法一次只能拒绝一次消息，如果要批量拒绝可以使用basicNack()来实现。
+    void basicNack(long deliveryTag,boolean multiple,boolean requeue) throws IOException;
+    其中multiple为true表示拒绝deliveryTag编号之前未被当前消费者确认的消息。
+
+    将上述俩方法的requeue设置为false，可以启用“死信队列”的功能。死信队列可以通过检测被拒绝或者未送达的消息来追踪问题。
+
+    Basic.RecoverOk basicRecover() throws IOException;
+    Basic.RecoverOk basicRecover(boolean requeue) throws IOException;
+    basicRecover()可以用来请求RabbitMq重新发送还未被确认的消息。
+    如果requeue设置为true，那么未被确认的消息会重新加入到队列中，可能会被分配给之前不同的消费者；如果设置为false，那么会被分配给之前相同的消费者。
+    默认情况下，如果不设置requeue，那么相当于requeue为true。
+
+3.6 关闭连接
+    在Connection关闭时，Channel也会自动关闭。
+    有三个状态：Open、Closing、Closed。
+    在程序正常关闭、客户端发生异常、或者发生网络异常时最终都会成为Closed状态。
+    当Connection或者Channel状态转变为Closed时会调用ShutdownListener。
+    而且如果将一个ShutdownListener注册到一个已经处于Closed状态的对象时，会立刻调用ShutdownListener。
+
+    通过getCloseReason方法可以知道对象关闭原因。
+    close()显示通知当前对象执行关闭操作。

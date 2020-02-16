@@ -1,0 +1,100 @@
+第四章
+4.1 消息何去何从
+    mandatory和immediate是Channel.basicPublish方法中的两个参数，都有在消息不可达时将消息返回给生产者。
+    RabbitMq提供的备份交换器可以将未能被交换器路由的消息存储起来，而不用返回给客户端。
+
+    4.1.1 mandatory参数
+        当该参数设为true时，若消息未能根据自身类型和路由键找到一个符合条件的队列，则会调用Basic.Return命令返回给生产者。
+        若为false，出现上述情形，这直接丢弃。
+
+        生产者可以通过调用channel.addReturnListener来添加ReturnListener监视器来实现获取未能路由的消息。
+
+    4.1.2 immediate参数
+        当该参数为true时，如果交换器在消息路由到队列时发现队列不存在任何消费者，则不会将下次存入队列中。
+        当与路由键匹配的所有队列都没有消费者时，该消息会通过Basic.Return返回至生产者。
+
+        概括来说就是mandatory告诉服务器至少将该消息路由到一个队列中，否则返回给生产者；immediate告诉服务器，如果队列上有消费者就立刻投递，如果所有匹配的队列都没有消费者就直接将消息返回给生产者，不存入队列。
+
+        其中RabbitMq在3.0版本去掉了immediate参数。
+
+    4.1.3 备份交换器
+        Alternate Exchange，简称AE。
+        如果未设置mandatory，则消息在未被路由的情况下会被丢失。
+        如果设置了，还将添加一个ReturnListener。
+        在声明交换器的时候添加alternate-exchange参数来实现备份交换器，也可以通过策略的方式来实现。
+        如果两者都是用，那么前者优先级更高，会覆盖策略的设置。
+        建议将备份交换器设置为fanout类型。设置为direct或者topic也行。
+        需要注意的是，消息被重新发送到备份交换器时路由键和从生产者发出来的路由键是一样的，如果不同则会丢失。
+        如果设置的备份交换器不存在，不会发生异常，消息会丢失。
+        如果备份交换器没有绑定任何队列，不会发生异常，消息会丢失。
+        如果备份交换器没有任何匹配的队列，不会发生异常，消息会丢失。
+        如果备份交换器和mandatory一起使用，mandatory会失效。
+
+4.2 过期时间（TTL）【x-message-ttl、x-expires】
+    4.2.1 设置消息的TTL
+        有两种方式设置TTL。
+        第一种是通过队列属性设置，那么队列中的所有消息都有相同的过期时间。
+        第二种是对消息本身单独设置，每条消息TTL可以不同。
+        如果同时使用，则以较小的为标准。
+        一旦超过TTL，则会变成死信。消费者将无法在收到该消息。
+
+        通过队列设置TTL：
+        channel.queueDeclare方法中加入x-message-ttl参数实现，单位为毫秒。也可以通过策略实现。还可以通过HTTP API接口设置。
+        如果不设置TTL，则表示消息不会过期。
+        如果设值0，则表示除非此时可以直接将消息投递给消费者，否则该消息将被立即丢弃。
+        Map<String,Object> args=new HashMap<>();
+        args.put("x-message-ttl",6000);
+        channel.queueDeclare(queueName,durable,exclusive,autoDelete,args);
+
+        针对每条消息设置TTL：
+        在channel.basicPublish加入expiration的属性参数，单位为毫秒。
+        第一种代码：
+        AMQP.BasicProperties.Builder builder=new AMQP.BasicProperties.Builder();
+        builder.deliveryMode(2);
+        builder.expiration("6000");
+        AMQP.BasicProperties properties=builder.build();
+        channel.basicPublish(exchangeName,routingKey,mandatory,properties,message);
+        第二种代码：
+        AMQP.BasicProperties properties=new AMQP.BasicProperties();
+        properties.setDeliveryMode(2);
+        properties.setException("6000");
+        channel.basicPublish(exchangeName,routingKey,mandatory,properties,message);
+
+        第一种在队列中设置过期的方法一旦消息过期就直接从队列中抹去，第二种即使过期，也不会抹去，每条消息是否过期是在即将投递给消费者之前判定的。
+        第一种方法里，队列中的已过期的消息肯定在队列头部，RabbitMq定期扫描是否有过期消息即可。
+        第二种方法里，每条消息的过期时间不同，如果要删除所有的消息，那么就要扫描整个队列，所以等投递的时候在判断效率好。
+
+    4.2.2 设置队列的TTL
+        通过channel.queueDeclare方法中的x-expires参数，以毫秒为单位，不能设置0，可以控制队列被自动删除前处于未使用状态的时间。
+        未使用的意思是队列上没有任何消费者，队列也没有被重新声明，并且在过期时间段内也未调用过Basic.Get命令。
+        RabbitMq会确保在过期时间到达后将队列删除，但是不保障删除的动作有多及时。
+        在RabbitMq重启时，持久化的的队列的过期时间会被重新计算。
+
+4.3 死信队列
+    DLX，全称Dead-Letter-eXchange，可以称为死信交换器。
+    当消息在队列中变成死信后，能被重新发送到另一个交换器，也就是DLX中，绑定DLX的队列也就称为死信队列。
+
+    成为死信的几种情况：
+    1.消息被拒绝（Basic.Reject/Basic.Nack），并且设置requeue为false。
+    2.消息过期。
+    3.队列达到最大长度。
+
+    通过在channel.queueDeclare中设置x-dead-letter-exchange参数来设置。
+
+    可以处理异常情况下，消息不能被消费者正常消费而被植入与死信队列中的情况。
+
+4.4 延迟队列
+    该队列存储的对象是对应的延迟信息，所谓的延迟消息是不想让消费者立刻拿到消息，而是等待特定时间后，消费者才能拿到这个消息进行消费。
+
+    场景：
+    1.订单系统中，一般下单30分钟时间进行支付，如果30分钟内没有支付成功，就将该订单进行异常处理，可以使用延迟队列来处理这些订单。
+    2.使用远程遥控的技术是智能家电在指定的时间进行工作。
+
+    在AMQP协议中，或者RabbitMq本身并没有直接支持延迟队列的功能，但是可以通过DLX和TTL来模拟延迟队列的功能。
+
+4.5 优先级队列
+    优先级高的消息具备优先被消费的特权。
+    可以通过设置队列的x-max-priority参数来实现。
+    当一个队列设置了优先级，那么进入该队列的消息就要设置优先级了
+    优先级最低为0，最高为10。
+    前提是：如果在消费者的消费速度大于生产者的速度且Broker中没有消息堆积的情况下，对发送的消息设置优先级也就没有什么实际意义了。

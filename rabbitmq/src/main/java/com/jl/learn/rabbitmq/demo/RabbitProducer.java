@@ -1,9 +1,6 @@
 package com.jl.learn.rabbitmq.demo;
 
-import com.rabbitmq.client.Channel;
-import com.rabbitmq.client.Connection;
-import com.rabbitmq.client.ConnectionFactory;
-import com.rabbitmq.client.MessageProperties;
+import com.rabbitmq.client.*;
 
 import java.io.IOException;
 import java.util.concurrent.TimeoutException;
@@ -32,6 +29,13 @@ public class RabbitProducer {
         channel.queueBind(QUEUE_NAME, EXCHANGE_NAME, ROUTING_KEY);
         String message = "Hello World!";
         channel.basicPublish(EXCHANGE_NAME, ROUTING_KEY, MessageProperties.PERSISTENT_TEXT_PLAIN, message.getBytes());
+        channel.addReturnListener(new ReturnListener() {
+            @Override
+            public void handleReturn(int i, String s, String s1, String s2, AMQP.BasicProperties basicProperties, byte[] bytes) throws IOException {
+                String message = new String(bytes);
+                System.out.println(message);
+            }
+        });
         channel.close();
         connection.close();
     }
