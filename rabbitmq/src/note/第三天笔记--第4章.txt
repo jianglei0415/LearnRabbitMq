@@ -1,0 +1,105 @@
+第四章
+4.6 RPC实现
+    Remote Procedure Call，远程过程调用。
+    客户端发送请求消息，服务端回复响应消息，为了接受响应消息，需要在请求消息中发送一个回调队列。
+    在BasicProperties属性中有两个属性：replyTo和correlationId。
+    replyTo用来设置一个回调队列。
+    correlationId用来关联请求（request）和其调用RPC之后的回复。
+    可以为每个客户端创建一个单一的回调队列。
+    根据correlationId来确定与哪个请求匹配。
+
+4.7 持久化
+    可以提高RabbitMq的可靠性,以防在异常情况下的数据丢失。
+    RabbitMq下的持久化分为三个部分：交换器的持久化、队列的持久化、消息的持久化。
+    将durable设置为true实现持久化。
+    如果不设置持久化，则在RabbitMq服务重启之后，相关交换器、队列的元数据会丢失。
+    队列的持久化能保证其本身的元数据不会因为异常情况而丢失，但是并不能保证内部所存储的消息不会丢失。
+    要确保消息不会丢失，需要在推送消息时，在BasicProperties中设置deliveryMode为2即可实现消息的持久化。
+    MessageProperties.PERSISTENT_TEXT_PLAIN实际上封装了该属性。
+
+    将交换器、队列、消息都设置了持久化并不能百分百保证数据不会丢失。
+    防止措施有：
+    1.autoAsk设置为false；
+    2.引入RabbitMq的镜像队列机制。
+    3.在发送端引入事务机制或者发送方确认机制来保证消息已经正确发送并存储至RabbitMq中。
+
+4.8 生产者确认
+    4.8.1 事务机制
+        关于事务有三个相关方法：channel.txSelect、channel.txCommit、channel.txRollback。
+        channel.txSelect相当于将当前的信道设置成事务模式。也相当于开启事务。
+        channel.txCommit用于提交事务。
+        channel.txRollback用于事务回滚。
+        使用事务机制会影响RabbitMq的性能。
+
+    4.8.2 发送方确认机制
+        生产者将信道设置成confirm（确认）模式，一旦信道进入confirm模式，所有在该信道上面发布的消息都会被指派一个唯一ID。
+        一旦消息被投递到所有匹配的队列之后，RabbitMq就会发送一个确认（Basic.Ack）给生产者。
+        如果消息和队列都会可持久化的，那么确认消息会在消息写入磁盘之后发出。
+        RabbitMq回传给生产者的确认消息中的deliveryTag包含了确认信息的序号。
+        RabbitMq也可以设置channel.basicAck方法中的multiple参数表示这个序号之前的所有消息都已经得到了处理。
+
+        事务机制在一条消息发送之后会使发送端阻塞，以等待RabbitMq回应。
+        而确认机制最大的好处是它是异步的，一旦发布一条消息，生产者可以在等待的同时又发布消息。
+        如果RabbitMq因为自身内部错误导致消息丢失，就会发送一条nack（Basic.Nack）命令，生产者应用程序同样可以在回调方法中处理该nack命令。
+
+        生产者通过将channel.confirmSelect()方法将信道设置为confirm模式。
+
+        事务机制和确认机制是互斥的，不能共存。
+        这两个机制能确保的是消息能被正确的发送到交换器，如果交换器没有匹配的队列消息也会丢失。
+
+4.9 消费端要点介绍
+    消费者客户端可以通过推模式或者拉模式来获取并消费消息。
+    当消费者消费完消息需要手动ack。
+
+    需要注意几点：
+    消息分发
+    消息顺序性
+    启用QueueingConsumer
+
+    4.9.1 消息分发
+        当队列拥有多个消费者时，队列会采用轮询的分发方式发送给消费者。
+        每条消息只发送给一个消费者。
+        通过basicQos()来实现限制消息总体大小的上限。
+
+    4.9.2 消息顺序性
+        指的是消费者消费到的消息和发送者发布的消息的顺序是一致的。
+        我们可以认为消息的有效性是从存入队列之后开始的，而不是在发送的时候开始的。
+        可以在消息体内添加全局有序标识（类似于SequenceID来实现）。
+
+    4.9.3 弃用QueueingConsumer
+        消费的方式都是通过继承DefaultConsumer类来实现的。
+        但是在RabbitMq客户端4.x版本被标记为@Deprecated。
+        1.该类会导致内存溢出。堆积消息。
+        2.QueueingConsumer会拖累同一个Connection下的所有信道使其性能降低。
+        3.同步递归调用QueueingConsumer会产生死锁。
+        4.RabbitMq的自动连接恢复机制不支持QueueingConsumer。
+        5.QueueingConsumer不是事件驱动的。
+
+4.10 消息传输保障
+    一般消息中间件的消息传输保障分为三个层级。
+    At most once：最多一次，消息可能会丢失，但绝不会重复传输。
+    At least once：最少一次，消息绝不会丢失，但可能会重复传输。
+    Exactly once：恰好一次，每次消息肯定会被传输一次且仅传输一次
+
+    RabbitMq支持第一种和第二种。
+    其中最少一次消费生产者需要开启事务机制或者确认机制（publisher confirm）机制。
+    需要配合使用mandatory参数或者备份交换器
+    需要进行持久化处理。
+    需要将autoAsk设置为false。
+
+    最多一次没啥限制，爱怎么发怎么发。
+
+    RabbitMq没有去重机制来保证“恰好一次”。
+    目前主流的消息中间件都没有消息去重机制，也不保障“恰好一次”。
+    去重一般是业务端实现。
+
+4.11 小结
+    设置mandatory参数或者备份交换器
+    设置publisher confirm机制或者事务机制
+    设置交换器、队列、消息持久化
+    设置autoAsk为false并手动确认
+    TTL
+    死信队列
+    延迟队列
+    优先级队列
+    RPC
